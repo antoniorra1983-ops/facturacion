@@ -80,8 +80,8 @@ def extraer_servicio(row, usar_consumo_como_facturada=False):
     # $/kWh de energía: derivado con ea_bd (energía indexada) como denominador
     precio_ea_clp = cargo_ea / ea_bd if ea_bd else 0
 
-    # CSP calculado desde $/kWh × ea (como hace el original)
-    csp_calc = csp_kwh * ea if csp_kwh else safe(row[43])
+    # CSP calculado desde $/kWh × consumo con decimales (como hace el original)
+    csp_calc = csp_kwh * consumo if csp_kwh else safe(row[43])
 
     return {
         "consumo_kwh": consumo,
