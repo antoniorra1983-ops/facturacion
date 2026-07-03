@@ -1,16 +1,9 @@
-#!/usr/bin/env python3
-"""
-Transfiere datos del archivo de Facturación Contrato ENELEFE (.xlsb)
-al formato del archivo Proyección Energía (.xlsx).
-
-Uso:
-    python facturacion_a_proyeccion.py <facturacion.xlsb> <proyeccion.xlsx>
-"""
-import argparse
-import sys
-from pathlib import Path
+import streamlit as st
 import pandas as pd
 from openpyxl import load_workbook
+from io import BytesIO
+import tempfile
+import os
 
 # ── Constantes ─────────────────────────────────────────────────────
 MESES = {1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr", 5: "May", 6: "Jun",
@@ -191,45 +184,87 @@ def escribir_limache(ws, r, d, p):
     ws.cell(row=r, column=50, value=f"=AV{r}+AW{r}")
 
 
-# ── Main ───────────────────────────────────────────────────────────
-def main():
-    parser = argparse.ArgumentParser(description="Facturación ENELEFE → Proyección Energía")
-    parser.add_argument("facturacion", help="Archivo .xlsb de facturación")
-    parser.add_argument("proyeccion", help="Archivo .xlsx de proyección energía")
-    parser.add_argument("-o", "--output", help="Archivo de salida (default: *_actualizado.xlsx)")
-    args = parser.parse_args()
+def procesar(fact_bytes, proy_bytes):
+    """Procesa ambos archivos y retorna el xlsx resultante como bytes."""
+    # Guardar facturación en archivo temporal (pyxlsb necesita ruta)
+    with tempfile.NamedTemporaryFile(suffix=".xlsb", delete=False) as tmp:
+        tmp.write(fact_bytes)
+        tmp_path = tmp.name
 
-    if not Path(args.facturacion).exists():
-        print(f"ERROR: No se encontró {args.facturacion}", file=sys.stderr)
-        sys.exit(1)
-    if not Path(args.proyeccion).exists():
-        print(f"ERROR: No se encontró {args.proyeccion}", file=sys.stderr)
-        sys.exit(1)
+    try:
+        datos = leer_facturacion(tmp_path)
+    finally:
+        os.unlink(tmp_path)
 
-    salida = args.output or args.proyeccion.replace(".xlsx", "_actualizado.xlsx")
-
-    print(f"Leyendo: {args.facturacion}")
-    datos = leer_facturacion(args.facturacion)
     anno, mes = datos["anno"], datos["mes_str"]
-    print(f"  Período: {mes} {anno}")
-    print(f"  QUILPUE: {datos['quilpue']['energia_facturada']:,.0f} kWh")
-    print(f"  LIMACHE: {datos['limache']['energia_facturada']:,.0f} kWh")
 
-    wb = load_workbook(args.proyeccion)
+    wb = load_workbook(BytesIO(proy_bytes))
 
     ws_q = wb["Fac. Ea. SEAT"]
     fila_q = encontrar_fila(ws_q, anno, mes)
     escribir_seat(ws_q, fila_q, {**datos["quilpue"], "anno": anno, "mes": mes})
-    print(f"  ✓ QUILPUE → Fac. Ea. SEAT fila {fila_q}")
 
     ws_l = wb["Fac. Ea. Limache"]
     fila_l = encontrar_fila(ws_l, anno, mes)
     escribir_limache(ws_l, fila_l, {**datos["limache"], "anno": anno, "mes": mes}, datos["peajes_dx"])
-    print(f"  ✓ LIMACHE → Fac. Ea. Limache fila {fila_l}")
 
-    wb.save(salida)
-    print(f"\n✓ Guardado: {salida}")
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    return output, datos, fila_q, fila_l
 
 
-if __name__ == "__main__":
-    main()
+# ── Interfaz Streamlit ─────────────────────────────────────────────
+st.set_page_config(page_title="Facturación → Proyección", page_icon="⚡")
+st.title("⚡ Facturación → Proyección Energía")
+st.write("Sube los dos archivos y descarga la proyección actualizada.")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    fact_file = st.file_uploader(
+        "📄 Archivo de Facturación (.xlsb)",
+        type=["xlsb"],
+        help="Ej: 2026_01_Facturacion_Contrato_ENELEFE_Valpo_15m.xlsb"
+    )
+
+with col2:
+    proy_file = st.file_uploader(
+        "📊 Archivo de Proyección (.xlsx)",
+        type=["xlsx"],
+        help="Ej: Proyección_Energía.xlsx"
+    )
+
+if fact_file and proy_file:
+    if st.button("🔄 Procesar", type="primary", use_container_width=True):
+        with st.spinner("Procesando..."):
+            try:
+                resultado, datos, fila_q, fila_l = procesar(
+                    fact_file.read(), proy_file.read()
+                )
+
+                st.success(f"✅ Período: **{datos['mes_str']} {datos['anno']}**")
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.metric("QUILPUE", f"{datos['quilpue']['energia_facturada']:,.0f} kWh")
+                    st.caption(f"→ Fac. Ea. SEAT fila {fila_q}")
+                with c2:
+                    st.metric("LIMACHE", f"{datos['limache']['energia_facturada']:,.0f} kWh")
+                    st.caption(f"→ Fac. Ea. Limache fila {fila_l}")
+
+                nombre_salida = proy_file.name.replace(".xlsx", "_actualizado.xlsx")
+                st.download_button(
+                    label="⬇️ Descargar Proyección Actualizada",
+                    data=resultado,
+                    file_name=nombre_salida,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    use_container_width=True,
+                )
+
+            except Exception as e:
+                st.error(f"Error: {e}")
+else:
+    st.info("👆 Sube ambos archivos para comenzar.")
