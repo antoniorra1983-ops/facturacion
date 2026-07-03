@@ -62,12 +62,27 @@ def extraer_mes_anno(df_proforma):
     raise ValueError(f"No se pudo extraer mes/año de: '{texto}'")
 
 
-def extraer_servicio(row):
-    ea = safe(row[36], 1)
+def extraer_servicio(row, usar_consumo_como_facturada=False):
     consumo = safe(row[32])
+    ea_bd = safe(row[36], 1)              # Energía facturada BD (indexada)
+    ea = int(consumo) if usar_consumo_como_facturada else ea_bd
     cargo_ea = safe(row[38])
     pot = safe(row[37])
     cargo_pot = safe(row[39])
+
+    # Precios unitarios desde BD
+    tx_z_kwh = safe(row[26])
+    tx_n_kwh = safe(row[23])
+    exc_kwh = safe(row[25])
+    sscc_kwh = safe(row[24])
+    csp_kwh = safe(row[31])
+
+    # $/kWh de energía: derivado con ea_bd (energía indexada) como denominador
+    precio_ea_clp = cargo_ea / ea_bd if ea_bd else 0
+
+    # CSP calculado desde $/kWh × ea (como hace el original)
+    csp_calc = csp_kwh * ea if csp_kwh else safe(row[43])
+
     return {
         "consumo_kwh": consumo,
         "energia_facturada": ea,
@@ -75,21 +90,21 @@ def extraer_servicio(row):
         "dolar": safe(row[21]),
         "precio_base_usd": PRECIO_BASE_USD,
         "precio_energia_usd": safe(row[12]),
-        "precio_energia_clp": cargo_ea / ea if ea else 0,
+        "precio_energia_clp": precio_ea_clp,
         "cargo_energia": cargo_ea,
         "pot_hp_kw": pot,
         "precio_potencia_kw": cargo_pot / pot if pot else 0,
         "cargo_potencia": cargo_pot,
-        "tx_zonal_kwh": safe(row[26]),
-        "tx_zonal_pesos": safe(row[26]) * consumo,
-        "tx_nacional_kwh": safe(row[23]),
-        "tx_nacional_pesos": safe(row[23]) * consumo,
-        "exenciones_kwh": safe(row[25]),
-        "exenciones_pesos": safe(row[25]) * consumo,
-        "sscc_kwh": safe(row[24]),
-        "sscc_pesos": safe(row[24]) * consumo,
-        "csp_kwh": safe(row[31]),
-        "csp_pesos": safe(row[43]),
+        "tx_zonal_kwh": tx_z_kwh,
+        "tx_zonal_pesos": tx_z_kwh * consumo,
+        "tx_nacional_kwh": tx_n_kwh,
+        "tx_nacional_pesos": tx_n_kwh * consumo,
+        "exenciones_kwh": exc_kwh,
+        "exenciones_pesos": exc_kwh * consumo,
+        "sscc_kwh": sscc_kwh,
+        "sscc_pesos": sscc_kwh * consumo,
+        "csp_kwh": csp_kwh,
+        "csp_pesos": csp_calc,
         "sobrecostos_mt": safe(row[46]),
         "sobrecosto_pd": safe(row[48]),
         "compensacion_pe": safe(row[50]),
@@ -139,8 +154,8 @@ def leer_facturacion(ruta):
     pdx = pd.read_excel(xls, sheet_name="PeajesDx_Limache", header=None)
 
     anno, mes_num = extraer_mes_anno(pq)
-    quilpue = extraer_servicio(bd.iloc[2])
-    limache = extraer_servicio(bd.iloc[3])
+    quilpue = extraer_servicio(bd.iloc[2], usar_consumo_como_facturada=False)
+    limache = extraer_servicio(bd.iloc[3], usar_consumo_como_facturada=True)
 
     quilpue["reliquidacion"] = safe(pq.iloc[40, 5]) if len(pq) > 40 else 0
     limache["reliquidacion"] = safe(pl.iloc[40, 5]) if len(pl) > 40 else 0
