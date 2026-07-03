@@ -73,10 +73,6 @@ def extraer_servicio(row):
 
 
 def extraer_peajes_dx(df_peajes):
-    for r in range(len(df_peajes) - 1, 1, -1):
-        cobrado = df_peajes.iloc[r, 37]
-        if pd.notna(cobrado) and str(cobrado).strip().upper() == "NO":
-            return parsear_peaje(df_peajes.iloc[r])
     return parsear_peaje(df_peajes.iloc[len(df_peajes) - 1])
 
 
