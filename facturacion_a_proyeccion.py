@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from openpyxl import load_workbook
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from io import BytesIO
 import tempfile
 import os
@@ -15,6 +16,35 @@ MESES_TEXTO = {"enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
 
 PRECIO_BASE_USD = 37.8
 
+HEADERS_SEAT = [
+    "Año", "Mes", "Consumo [kWh]", "Energía facturada kWh",
+    "Factor Referenciación de Precios", "Dólar",
+    "Precio Base Energia [USD/MWh]", "Precio Energia Actual [USD/MWh]",
+    "Precio Energia Actual [$/kWh]", "Precio Energia [$]",
+    "Potecia Hr Punta [kW]", "Precio Potencia [$/kW/mes]", "Precio Potencia $",
+    "Transmisión Zonal [$/kWh]", "Transmisión Zonal [$]",
+    "Transmisión Nacional [$/kWh]", "Transmisión Nacional [$]",
+    "Cargo asociado a exenciones [$/kWh]", "Cargo asociado a exenciones [$]",
+    "Peaje SS.CC", "Precio Peaje SS.CC $",
+    "Cargo por Servicio Público [$/kWh]", "Cargo por Servicio Público [$]",
+    "Sobrecostos MT", "Sobrecosto PD", "Compensacion PE",
+    "Costo Oportunidad RH", "Sobrecosto RH",
+    "Servicios Complementarios", "Reliquidación Factura Anterior",
+    "Liquidacion Peaje CEN", "Pago ERNC",
+    "Total Sin IVA", "IVA", "Total C/IVA",
+]
+
+HEADERS_LIMACHE_EXTRA = [
+    "Energía", "HP", "Demanda Maxima", "Pot Fact Comp",
+    "Cargo fijo mensual",
+    "Cargo por energía $/kWh", "Cargo por energía $",
+    "Cargo por dda máx pot $/kW", "Cargo por dda máx pot $",
+    "Cargo por Compra de Potencia $/kW", "Cargo por Compra de Potencia $",
+    "Cargo por dda máx pot HP $/kW", "Cargo por dda máx pot HP $",
+    "Estabilización Tarifas [$/kWh]", "Estabilización Tarifas $",
+    "Total Sin IVA", "IVA", "Total C/IVA",
+]
+
 
 def safe(val, default=0):
     if pd.notna(val) and isinstance(val, (int, float)):
@@ -22,7 +52,7 @@ def safe(val, default=0):
     return default
 
 
-# ── Lectura del .xlsb ─────────────────────────────────────────────
+# ── Lectura ────────────────────────────────────────────────────────
 def extraer_mes_anno(df_proforma):
     texto = str(df_proforma.iloc[2, 2]).strip().lower()
     for nombre, num in MESES_TEXTO.items():
@@ -72,10 +102,6 @@ def extraer_servicio(row):
     }
 
 
-def extraer_peajes_dx(df_peajes):
-    return parsear_peaje(df_peajes.iloc[len(df_peajes) - 1])
-
-
 def parsear_peaje(row):
     energia = safe(row[31])
     hp = safe(row[34])
@@ -110,26 +136,19 @@ def leer_facturacion(ruta):
     quilpue["reliquidacion"] = safe(pq.iloc[40, 5]) if len(pq) > 40 else 0
     limache["reliquidacion"] = safe(pl.iloc[40, 5]) if len(pl) > 40 else 0
 
+    # Última fila de PeajesDx_Limache
+    peaje = parsear_peaje(pdx.iloc[len(pdx) - 1])
+
     return {
         "anno": anno, "mes_num": mes_num, "mes_str": MESES[mes_num],
         "quilpue": quilpue, "limache": limache,
-        "peajes_dx": extraer_peajes_dx(pdx),
+        "peajes_dx": peaje,
     }
 
 
-# ── Escritura en el .xlsx ─────────────────────────────────────────
-def encontrar_fila(ws, anno, mes):
-    for row in range(2, ws.max_row + 1):
-        if ws.cell(row=row, column=1).value == anno and ws.cell(row=row, column=2).value == mes:
-            return row
-    for row in range(2, ws.max_row + 2):
-        if ws.cell(row=row, column=1).value is None:
-            return row
-    return ws.max_row + 1
-
-
-def escribir_seat(ws, r, d):
-    vals = [
+# ── Generar Excel de salida ────────────────────────────────────────
+def valores_seat(d):
+    return [
         d["anno"], d["mes"], d["consumo_kwh"], d["energia_facturada"],
         d["factor_ref"], d["dolar"], d["precio_base_usd"], d["precio_energia_usd"],
         d["precio_energia_clp"], d["cargo_energia"], d["pot_hp_kw"],
@@ -144,28 +163,10 @@ def escribir_seat(ws, r, d):
         d["serv_complementarios"], d["reliquidacion"],
         d["liquidacion_peaje_cen"], d["pago_ernc"],
     ]
-    for col, val in enumerate(vals, start=1):
-        ws.cell(row=r, column=col, value=val)
-    ws.cell(row=r, column=33, value=f"=J{r}+M{r}+O{r}+Q{r}+S{r}+U{r}+W{r}+X{r}+Y{r}+Z{r}+AA{r}+AB{r}+AC{r}+AD{r}+AE{r}+AF{r}")
-    ws.cell(row=r, column=34, value=f"=(AG{r}-W{r})*0.19")
-    ws.cell(row=r, column=35, value=f"=AG{r}+AH{r}")
 
 
-def escribir_limache(ws, r, d, p):
-    vals = [
-        d["anno"], d["mes"], d["consumo_kwh"], d["energia_facturada"],
-        d["factor_ref"], d["dolar"], d["precio_base_usd"], d["precio_energia_usd"],
-        d["precio_energia_clp"], d["cargo_energia"], d["pot_hp_kw"],
-        d["precio_potencia_kw"], d["cargo_potencia"],
-        d["tx_zonal_kwh"], d["tx_zonal_pesos"],
-        d["tx_nacional_kwh"], d["tx_nacional_pesos"],
-        d["exenciones_kwh"], d["exenciones_pesos"],
-        d["sscc_kwh"], d["sscc_pesos"],
-        d["csp_kwh"], d["csp_pesos"],
-        d["sobrecostos_mt"], d["sobrecosto_pd"], d["compensacion_pe"],
-        d["costo_oportunidad_rh"], d["sobrecosto_rh"],
-        d["serv_complementarios"], d["reliquidacion"],
-        d["liquidacion_peaje_cen"], d["pago_ernc"],
+def valores_peaje(p):
+    return [
         p["energia"], p["hp"], p["dda_max"], p["pot_fact_comp"],
         p["cargo_fijo"], p["cargo_energia_kwh"], p["cargo_energia_pesos"],
         p["cargo_dda_max_kw"], p["cargo_dda_max_pesos"],
@@ -173,88 +174,145 @@ def escribir_limache(ws, r, d, p):
         p["cargo_hp_kw"], p["cargo_hp_pesos"],
         p["estab_kwh"], p["estab_pesos"],
     ]
-    for col, val in enumerate(vals, start=1):
-        ws.cell(row=r, column=col, value=val)
-    ws.cell(row=r, column=48, value=f"=J{r}+M{r}+O{r}+Q{r}+S{r}+U{r}+W{r}+X{r}+Y{r}+Z{r}+AA{r}+AB{r}+AC{r}+AD{r}+AE{r}+AF{r}+AK{r}+AM{r}+AO{r}+AQ{r}+AS{r}+AU{r}")
-    ws.cell(row=r, column=49, value=f"=AV{r}*0.19")
-    ws.cell(row=r, column=50, value=f"=AV{r}+AW{r}")
 
 
-def procesar(fact_bytes, proy_bytes):
-    """Procesa ambos archivos y retorna el xlsx resultante como bytes."""
-    # Guardar facturación en archivo temporal (pyxlsb necesita ruta)
-    with tempfile.NamedTemporaryFile(suffix=".xlsb", delete=False) as tmp:
-        tmp.write(fact_bytes)
-        tmp_path = tmp.name
+def generar_excel(datos):
+    from openpyxl import Workbook
 
-    try:
-        datos = leer_facturacion(tmp_path)
-    finally:
-        os.unlink(tmp_path)
+    wb = Workbook()
+    anno = datos["anno"]
+    mes = datos["mes_str"]
 
-    anno, mes = datos["anno"], datos["mes_str"]
+    header_font = Font(bold=True, size=10)
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_font_white = Font(bold=True, size=10, color="FFFFFF")
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin"),
+    )
+    num_fmt_money = '#,##0'
+    num_fmt_dec = '#,##0.000'
 
-    wb = load_workbook(BytesIO(proy_bytes))
+    # ── Hoja QUILPUE ──
+    ws_q = wb.active
+    ws_q.title = "Fac. Ea. SEAT"
+    for c, h in enumerate(HEADERS_SEAT, 1):
+        cell = ws_q.cell(row=1, column=c, value=h)
+        cell.font = header_font_white
+        cell.fill = header_fill
+        cell.border = thin_border
+        cell.alignment = Alignment(wrap_text=True, horizontal="center")
 
-    ws_q = wb["Fac. Ea. SEAT"]
-    fila_q = encontrar_fila(ws_q, anno, mes)
-    escribir_seat(ws_q, fila_q, {**datos["quilpue"], "anno": anno, "mes": mes})
+    vals_q = valores_seat({**datos["quilpue"], "anno": anno, "mes": mes})
+    r = 2
+    for c, v in enumerate(vals_q, 1):
+        cell = ws_q.cell(row=r, column=c, value=v)
+        cell.border = thin_border
+        if isinstance(v, float) and abs(v) > 1000:
+            cell.number_format = num_fmt_money
+        elif isinstance(v, float):
+            cell.number_format = num_fmt_dec
 
-    ws_l = wb["Fac. Ea. Limache"]
-    fila_l = encontrar_fila(ws_l, anno, mes)
-    escribir_limache(ws_l, fila_l, {**datos["limache"], "anno": anno, "mes": mes}, datos["peajes_dx"])
+    ws_q.cell(row=r, column=33, value=f"=J{r}+M{r}+O{r}+Q{r}+S{r}+U{r}+W{r}+X{r}+Y{r}+Z{r}+AA{r}+AB{r}+AC{r}+AD{r}+AE{r}+AF{r}")
+    ws_q.cell(row=r, column=34, value=f"=(AG{r}-W{r})*0.19")
+    ws_q.cell(row=r, column=35, value=f"=AG{r}+AH{r}")
+    for c in [33, 34, 35]:
+        ws_q.cell(row=r, column=c).border = thin_border
+        ws_q.cell(row=r, column=c).number_format = num_fmt_money
+
+    # ── Hoja LIMACHE ──
+    ws_l = wb.create_sheet("Fac. Ea. Limache")
+    headers_lim = HEADERS_SEAT[:32] + HEADERS_LIMACHE_EXTRA
+    for c, h in enumerate(headers_lim, 1):
+        cell = ws_l.cell(row=1, column=c, value=h)
+        cell.font = header_font_white
+        cell.fill = header_fill
+        cell.border = thin_border
+        cell.alignment = Alignment(wrap_text=True, horizontal="center")
+
+    vals_l = valores_seat({**datos["limache"], "anno": anno, "mes": mes})
+    vals_l += valores_peaje(datos["peajes_dx"])
+    r = 2
+    for c, v in enumerate(vals_l, 1):
+        cell = ws_l.cell(row=r, column=c, value=v)
+        cell.border = thin_border
+        if isinstance(v, float) and abs(v) > 1000:
+            cell.number_format = num_fmt_money
+        elif isinstance(v, float):
+            cell.number_format = num_fmt_dec
+
+    ws_l.cell(row=r, column=48, value=f"=J{r}+M{r}+O{r}+Q{r}+S{r}+U{r}+W{r}+X{r}+Y{r}+Z{r}+AA{r}+AB{r}+AC{r}+AD{r}+AE{r}+AF{r}+AK{r}+AM{r}+AO{r}+AQ{r}+AS{r}+AU{r}")
+    ws_l.cell(row=r, column=49, value=f"=AV{r}*0.19")
+    ws_l.cell(row=r, column=50, value=f"=AV{r}+AW{r}")
+    for c in [48, 49, 50]:
+        ws_l.cell(row=r, column=c).border = thin_border
+        ws_l.cell(row=r, column=c).number_format = num_fmt_money
 
     output = BytesIO()
     wb.save(output)
     output.seek(0)
+    return output
 
-    return output, datos, fila_q, fila_l
 
-
-# ── Interfaz Streamlit ─────────────────────────────────────────────
+# ── Streamlit ──────────────────────────────────────────────────────
 st.set_page_config(page_title="Facturación → Proyección", page_icon="⚡")
 st.title("⚡ Facturación → Proyección Energía")
-st.write("Sube los dos archivos y descarga la proyección actualizada.")
+st.write("Sube el archivo de facturación y descarga los datos en formato Proyección.")
 
-col1, col2 = st.columns(2)
+fact_file = st.file_uploader(
+    "📄 Archivo de Facturación (.xlsb)",
+    type=["xlsb"],
+)
 
-with col1:
-    fact_file = st.file_uploader(
-        "📄 Archivo de Facturación (.xlsb)",
-        type=["xlsb"],
-        help="Ej: 2026_01_Facturacion_Contrato_ENELEFE_Valpo_15m.xlsb"
-    )
-
-with col2:
-    proy_file = st.file_uploader(
-        "📊 Archivo de Proyección (.xlsx)",
-        type=["xlsx"],
-        help="Ej: Proyección_Energía.xlsx"
-    )
-
-if fact_file and proy_file:
+if fact_file:
     if st.button("🔄 Procesar", type="primary", use_container_width=True):
         with st.spinner("Procesando..."):
             try:
-                resultado, datos, fila_q, fila_l = procesar(
-                    fact_file.read(), proy_file.read()
-                )
+                with tempfile.NamedTemporaryFile(suffix=".xlsb", delete=False) as tmp:
+                    tmp.write(fact_file.read())
+                    tmp_path = tmp.name
 
-                st.success(f"✅ Período: **{datos['mes_str']} {datos['anno']}**")
+                try:
+                    datos = leer_facturacion(tmp_path)
+                finally:
+                    os.unlink(tmp_path)
 
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.metric("QUILPUE", f"{datos['quilpue']['energia_facturada']:,.0f} kWh")
-                    st.caption(f"→ Fac. Ea. SEAT fila {fila_q}")
-                with c2:
-                    st.metric("LIMACHE", f"{datos['limache']['energia_facturada']:,.0f} kWh")
-                    st.caption(f"→ Fac. Ea. Limache fila {fila_l}")
+                st.success(f"**{datos['mes_str']} {datos['anno']}** procesado")
 
-                nombre_salida = proy_file.name.replace(".xlsx", "_actualizado.xlsx")
+                # Mostrar resumen
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.subheader("QUILPUE")
+                    q = datos["quilpue"]
+                    st.metric("Energía", f"{q['energia_facturada']:,.0f} kWh")
+                    st.metric("Potencia HP", f"{q['pot_hp_kw']:,.0f} kW")
+                    st.metric("Cargo Energía", f"${q['cargo_energia']:,.0f}")
+
+                with col2:
+                    st.subheader("LIMACHE")
+                    l = datos["limache"]
+                    st.metric("Energía", f"{l['energia_facturada']:,.0f} kWh")
+                    st.metric("Potencia HP", f"{l['pot_hp_kw']:,.0f} kW")
+                    st.metric("Cargo Energía", f"${l['cargo_energia']:,.0f}")
+
+                # Peajes Dx
+                st.subheader("Peajes Distribución Limache")
+                p = datos["peajes_dx"]
+                pc1, pc2, pc3 = st.columns(3)
+                pc1.metric("Cargo Fijo", f"${p['cargo_fijo']:,.0f}")
+                pc1.metric("Dda Máx Pot", f"${p['cargo_dda_max_pesos']:,.0f}")
+                pc2.metric("Compra Pot", f"${p['cargo_compra_pot_pesos']:,.0f}")
+                pc2.metric("HP", f"${p['cargo_hp_pesos']:,.0f}")
+                pc3.metric("Estabilización", f"${p['estab_pesos']:,.0f}")
+
+                # Generar Excel
+                resultado = generar_excel(datos)
+                nombre = f"Proyeccion_{datos['mes_str']}_{datos['anno']}.xlsx"
+
                 st.download_button(
-                    label="⬇️ Descargar Proyección Actualizada",
+                    label="⬇️ Descargar Excel",
                     data=resultado,
-                    file_name=nombre_salida,
+                    file_name=nombre,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary",
                     use_container_width=True,
@@ -263,4 +321,4 @@ if fact_file and proy_file:
             except Exception as e:
                 st.error(f"Error: {e}")
 else:
-    st.info("👆 Sube ambos archivos para comenzar.")
+    st.info("👆 Sube el archivo de facturación (.xlsb) para comenzar.")
