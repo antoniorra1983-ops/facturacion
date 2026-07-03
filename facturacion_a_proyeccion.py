@@ -122,6 +122,15 @@ def parsear_peaje(row):
     }
 
 
+def extraer_peajes_dx(df_peajes):
+    """Busca la última fila con datos reales (cargo fijo > 0)."""
+    for r in range(len(df_peajes) - 1, -1, -1):
+        cargo = df_peajes.iloc[r, 17]
+        if pd.notna(cargo) and isinstance(cargo, (int, float)) and cargo > 0:
+            return parsear_peaje(df_peajes.iloc[r])
+    return parsear_peaje(df_peajes.iloc[len(df_peajes) - 1])
+
+
 def leer_facturacion(ruta):
     xls = pd.ExcelFile(ruta, engine="pyxlsb")
     bd = pd.read_excel(xls, sheet_name="BD Clientes", header=None)
@@ -136,8 +145,7 @@ def leer_facturacion(ruta):
     quilpue["reliquidacion"] = safe(pq.iloc[40, 5]) if len(pq) > 40 else 0
     limache["reliquidacion"] = safe(pl.iloc[40, 5]) if len(pl) > 40 else 0
 
-    # Última fila de PeajesDx_Limache
-    peaje = parsear_peaje(pdx.iloc[len(pdx) - 1])
+    peaje = extraer_peajes_dx(pdx)
 
     return {
         "anno": anno, "mes_num": mes_num, "mes_str": MESES[mes_num],
